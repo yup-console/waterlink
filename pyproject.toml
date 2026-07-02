@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "waterlink"
+version = "1.0.0"
+description = "A modern, async, fully-typed Lavalink v4 client for Python Discord bots."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "waterlink contributors" },
+]
+keywords = ["discord", "lavalink", "music", "asyncio", "bot", "voice"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Chat",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Typing :: Typed",
+]
+dependencies = [
+    "aiohttp>=3.9,<4",
+]
+
+[project.optional-dependencies]
+discordpy = ["discord.py>=2.4,<3"]
+pycord = ["py-cord>=2.4,<3"]
+nextcord = ["nextcord>=2.6,<3"]
+disnake = ["disnake>=2.9,<3"]
+dev = [
+    "discord.py>=2.4,<3",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[project.urls]
+Homepage = "https://github.com/yup-console/waterlink"
+Repository = "https://github.com/yup-console/waterlink"
+Issues = "https://github.com/yup-console/waterlink/issues"
+Changelog = "https://github.com/yup-console/waterlink/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/waterlink"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: tests that require a running Lavalink server",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "PTH"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["waterlink"]
+warn_unused_configs = true
+warn_unused_ignores = true
