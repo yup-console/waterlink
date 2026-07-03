@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -138,14 +139,38 @@ class WaterlinkClient:
         if guild is None:
             raise ConfigurationError(f"Guild {guild_id} not found in the bot's cache")
 
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            raise ConfigurationError(
+                f"Channel {channel_id} not found in guild {guild_id}'s cache. "
+                "Make sure the bot has the Guilds intent enabled."
+            )
+
         node = self.pool.best_node(strategy=strategy, region=region)
-        voice_protocol = self._voice_protocol_cls(self.bot, guild)
-        voice_protocol.guild = guild
+
+        # Use the library's own channel.connect(cls=...) so it registers the
+        # voice client with its internal connection state correctly (this is
+        # what actually wires up VOICE_STATE_UPDATE / VOICE_SERVER_UPDATE
+        # gateway dispatch to our VoiceProtocol) instead of only calling
+        # guild.change_voice_state(), which does not register a voice client.
+        voice_protocol = await channel.connect(
+            cls=self._voice_protocol_cls,
+            self_deaf=self_deaf,
+            self_mute=self_mute,
+            reconnect=False,
+        )
 
         player = Player(guild_id=guild_id, pool=self.pool, node=node, voice_protocol=voice_protocol)
         self._players[guild_id] = player
+        player.channel_id = channel_id
 
-        await player.connect(channel_id, self_deaf=self_deaf, self_mute=self_mute)
+        try:
+            await asyncio.wait_for(player._pending_voice_update.wait(), timeout=15.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Guild %s: voice connection did not confirm within timeout", guild_id
+            )
+
         return player
 
     async def disconnect(self, guild_id: int) -> None:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "waterlink"
-version = "1.0.0"
+version = "1.0.1"
 description = "A modern, async, fully-typed Lavalink v4 client for Python Discord bots."
 readme = "README.md"
 requires-python = ">=3.11"

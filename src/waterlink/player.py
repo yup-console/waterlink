@@ -106,8 +106,15 @@ class Player:
             )
 
         guild = self.voice_protocol.guild
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            raise PlayerNotConnectedError(
+                f"Could not find channel {channel_id} in guild {guild.id}'s cache. "
+                "Make sure the bot's Guilds intent is enabled and the channel exists."
+            )
+
         self._pending_voice_update.clear()
-        await guild.change_voice_state(channel=_ChannelRef(channel_id), self_deaf=self_deaf, self_mute=self_mute)
+        await guild.change_voice_state(channel=channel, self_deaf=self_deaf, self_mute=self_mute)
         self.channel_id = channel_id
 
         try:
@@ -326,18 +333,3 @@ class Player:
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         current = self.queue.current.title if self.queue.current else None
         return f"<Player guild={self.guild_id} node={self.node.name!r} current={current!r}>"
-
-
-class _ChannelRef:
-    """Minimal stand-in passed to ``guild.change_voice_state`` so we don't
-    need a real library-specific channel object — the libraries only read
-    ``.id`` off of it when sending the gateway payload in most call paths.
-    For full compatibility, prefer passing a real channel object from
-    :meth:`waterlink.manager.WaterlinkClient.connect` instead of raw IDs
-    where the host library requires it.
-    """
-
-    __slots__ = ("id",)
-
-    def __init__(self, channel_id: int) -> None:
-        self.id = channel_id

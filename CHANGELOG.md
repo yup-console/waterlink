@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-03
+
 ### Added
 
 - `waterlink.metadata` module with `TitleCleaner` for cleaning noisy
@@ -17,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   to opt into automatic metadata cleaning on search results.
 - Recognizes YouTube's auto-generated `"<Artist> - Topic"` and
   `"<Artist>VEVO"` channel naming conventions.
+
+### Fixed
+
+- **Critical:** `WaterlinkClient.connect()` was joining voice channels
+  incorrectly — it called `guild.change_voice_state()` directly with a
+  fake channel stand-in instead of using the library's own
+  `channel.connect(cls=...)` API. This meant a voice client was never
+  properly registered with discord.py/py-cord/nextcord/disnake's internal
+  connection state, so `VOICE_SERVER_UPDATE`/`VOICE_STATE_UPDATE` gateway
+  events were never delivered to the player. Tracks would enqueue
+  successfully (REST calls to Lavalink succeeded) but no audio would ever
+  play. Fixed to use `channel.connect(cls=WaterlinkVoiceProtocol, ...)`,
+  the documented cross-library-compatible way to attach a custom voice
+  protocol.
 
 ## [1.0.0] - 2026-07-02
 
