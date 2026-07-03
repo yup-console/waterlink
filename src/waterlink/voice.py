@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from .errors import VoiceStateError
 
@@ -56,17 +56,27 @@ class VoiceStateUpdate:
         )
 
 
-def make_voice_protocol(base_cls: type) -> type:
+def make_voice_protocol(base_cls: type, player_factory: "Callable[[Any], Any]") -> type:
     """Build a ``VoiceProtocol``-compatible class bound to a specific
     library's base class (e.g. ``discord.VoiceProtocol``).
 
-    The returned class forwards ``on_voice_server_update`` and
-    ``on_voice_state_update`` callbacks to the :class:`Player` stashed on
-    ``self.player`` by :mod:`waterlink.player` when it connects.
+    ``player_factory`` is called with the constructed voice-protocol
+    instance as soon as ``__init__`` runs (before ``connect()`` can
+    possibly be invoked by the library) and must return the
+    :class:`~waterlink.player.Player` to bind. This guarantees the player
+    is attached before any gateway callback (``on_voice_state_update`` /
+    ``on_voice_server_update``) can fire — those are dispatched by the
+    library only once the voice client is registered via
+    ``channel.connect(cls=...)``, and construction always happens inside
+    that call before any event can arrive.
     """
 
     class WaterlinkVoiceProtocol(base_cls):  # type: ignore[misc,valid-type]
         player: "Player | None" = None
+
+        def __init__(self, client: Any, channel: Any) -> None:
+            super().__init__(client, channel)
+            self.player = player_factory(self)
 
         async def on_voice_server_update(self, data: dict[str, Any]) -> None:
             if self.player is None:
@@ -95,15 +105,24 @@ def make_voice_protocol(base_cls: type) -> type:
             self_deaf: bool = True,
             self_mute: bool = False,
         ) -> None:
-            # Actual channel join is driven by Player.connect(), which
-            # calls the library's own gateway voice-state-change API
-            # before this VoiceProtocol is attached. This override exists
-            # only to satisfy the library's VoiceProtocol contract.
-            return None
+            # We intentionally do NOT run the base VoiceClient's UDP/voice
+            # websocket connection logic — Lavalink owns actual audio
+            # transport, not us. We do still need to perform the same
+            # first step the base implementation does: sending the
+            # gateway OP 4 voice state update, which is what causes
+            # Discord to send back VOICE_STATE_UPDATE / VOICE_SERVER_UPDATE.
+            await self.channel.guild.change_voice_state(
+                channel=self.channel, self_mute=self_mute, self_deaf=self_deaf
+            )
 
         async def disconnect(self, *, force: bool = False) -> None:
             if self.player is not None:
                 await self.player._on_voice_disconnect(force=force)
+            try:
+                await self.channel.guild.change_voice_state(channel=None)
+            except Exception:  # noqa: BLE001
+                pass
+            self.cleanup()
 
     WaterlinkVoiceProtocol.__name__ = "WaterlinkVoiceProtocol"
     WaterlinkVoiceProtocol.__qualname__ = "WaterlinkVoiceProtocol"

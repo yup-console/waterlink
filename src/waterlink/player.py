@@ -54,7 +54,8 @@ class Player:
         self.pool = pool
         self.node = node
         self.voice_protocol = voice_protocol
-        self.voice_protocol.player = self
+        if voice_protocol is not None:
+            self.voice_protocol.player = self
 
         self.queue: Queue = Queue()
         self.filters: FilterChain = FilterChain()
@@ -105,7 +106,7 @@ class Player:
                 f"Player already connected to channel {self.channel_id}; pass move=True to switch"
             )
 
-        guild = self.voice_protocol.guild
+        guild = self.voice_protocol.channel.guild
         channel = guild.get_channel(channel_id)
         if channel is None:
             raise PlayerNotConnectedError(
@@ -116,6 +117,7 @@ class Player:
         self._pending_voice_update.clear()
         await guild.change_voice_state(channel=channel, self_deaf=self_deaf, self_mute=self_mute)
         self.channel_id = channel_id
+        self.voice_protocol.channel = channel
 
         try:
             await asyncio.wait_for(self._pending_voice_update.wait(), timeout=15.0)
@@ -125,7 +127,7 @@ class Player:
             )
 
     async def disconnect(self) -> None:
-        guild = self.voice_protocol.guild
+        guild = self.voice_protocol.channel.guild
         await guild.change_voice_state(channel=None)
         self.channel_id = None
         self._connected_to_voice_gateway = False

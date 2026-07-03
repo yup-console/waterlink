@@ -82,7 +82,7 @@ class WaterlinkClient:
             default_strategy=default_routing_strategy,
         )
         self._players: dict[int, Player] = {}
-        self._voice_protocol_cls = make_voice_protocol(_resolve_voice_protocol_base(self._library))
+        self._voice_protocol_base = _resolve_voice_protocol_base(self._library)
         self._clean_metadata_default = clean_metadata
         self._title_cleaner = title_cleaner or TitleCleaner()
 
@@ -148,21 +148,51 @@ class WaterlinkClient:
 
         node = self.pool.best_node(strategy=strategy, region=region)
 
-        # Use the library's own channel.connect(cls=...) so it registers the
-        # voice client with its internal connection state correctly (this is
-        # what actually wires up VOICE_STATE_UPDATE / VOICE_SERVER_UPDATE
-        # gateway dispatch to our VoiceProtocol) instead of only calling
-        # guild.change_voice_state(), which does not register a voice client.
-        voice_protocol = await channel.connect(
-            cls=self._voice_protocol_cls,
+        # Any stale voice client on this guild (e.g. leftover from a crash)
+        # must be cleared first, or discord.py will refuse to register a
+        # new one for the same guild.
+        existing_vc = getattr(guild, "voice_client", None)
+        if existing_vc is not None:
+            try:
+                await existing_vc.disconnect(force=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+        player_box: dict[str, Player] = {}
+
+        def _bind_player(voice_protocol: Any) -> Player:
+            # Called synchronously from WaterlinkVoiceProtocol.__init__,
+            # which itself runs inside channel.connect() below — i.e.
+            # strictly before the library can dispatch any
+            # VOICE_STATE_UPDATE/VOICE_SERVER_UPDATE to this instance.
+            # This guarantees no gateway callback ever arrives before a
+            # Player exists to receive it.
+            player = Player(guild_id=guild_id, pool=self.pool, node=node, voice_protocol=None)
+            player.voice_protocol = voice_protocol
+            player.channel_id = channel_id
+            player_box["player"] = player
+            return player
+
+        voice_protocol_cls = make_voice_protocol(self._voice_protocol_base, _bind_player)
+
+        # channel.connect(cls=...) is the library's documented, supported
+        # way to register a custom VoiceProtocol: it constructs the class,
+        # stores it in the guild's internal voice-client registry (which is
+        # what the gateway dispatcher looks up by guild ID to route
+        # VOICE_STATE_UPDATE / VOICE_SERVER_UPDATE), and calls its
+        # .connect(). Constructing a VoiceProtocol manually skips that
+        # registration and events are silently dropped, so this call must
+        # go through the library rather than being done by hand.
+        await channel.connect(
+            cls=voice_protocol_cls,
             self_deaf=self_deaf,
             self_mute=self_mute,
             reconnect=False,
+            timeout=15.0,
         )
 
-        player = Player(guild_id=guild_id, pool=self.pool, node=node, voice_protocol=voice_protocol)
+        player = player_box["player"]
         self._players[guild_id] = player
-        player.channel_id = channel_id
 
         try:
             await asyncio.wait_for(player._pending_voice_update.wait(), timeout=15.0)

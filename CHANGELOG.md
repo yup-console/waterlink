@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-07-03
+
+### Fixed
+
+- **Critical, actually fixed this time:** the 1.0.1 fix for voice
+  connections was incomplete — it changed how the channel was looked up
+  but the `VoiceProtocol.connect()` override still no-op'd instead of
+  sending the gateway voice-state update, so the bot stopped joining
+  voice channels at all. The real issue was twofold:
+  1. `VoiceProtocol.connect()` must actually call
+     `guild.change_voice_state(channel=..., ...)` itself — waterlink
+     intentionally skips the base class's UDP audio socket setup (Lavalink
+     handles audio transport), but still needs to trigger the initial
+     gateway OP 4 that causes Discord to send back
+     `VOICE_STATE_UPDATE`/`VOICE_SERVER_UPDATE`.
+  2. The `Player` must be bound to its `VoiceProtocol` *before*
+     `channel.connect(cls=...)` can possibly dispatch those gateway
+     callbacks, or they arrive with no player to receive them and are
+     silently dropped. The player is now constructed and bound inside the
+     voice protocol's own `__init__`, which always runs before any
+     callback can fire, closing the race entirely.
+  3. Fixed `Player.connect()` (channel-move path) and `Player.disconnect()`,
+     which referenced a nonexistent `voice_protocol.guild` attribute —
+     corrected to `voice_protocol.channel.guild`, matching the real
+     `VoiceProtocol` contract (which only exposes `.channel`).
+  This was verified against a simulated gateway timing harness covering
+  connect → search → enqueue → play → move-channel → disconnect, not just
+  imports/syntax.
+
 ## [1.0.1] - 2026-07-03
 
 ### Added
