@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-07-03
+
+### Fixed
+
+- `RESTResponseError` now includes Lavalink's actual error response body
+  in its message instead of just the HTTP status code — the previous
+  `HTTP 400: PATCH ... failed` message hid the real reason and made the
+  voice-update 400 reported against the public jirayu.net node
+  undiagnosable from the traceback alone.
+- `VoiceServerUpdate.endpoint` is now defensively stripped of a
+  `wss://`/`https://` scheme prefix if present, since Lavalink v4 rejects
+  a scheme-prefixed endpoint and some library/proxy combinations have
+  been observed to include one.
+- Guarded against dispatching a voice update to Lavalink with a missing
+  endpoint (Discord sends `endpoint: null` briefly during voice server
+  region migration) instead of forwarding a broken payload.
+- Added debug logging around voice update dispatch so connection issues
+  are diagnosable from bot logs going forward.
+
 ## [1.0.2] - 2026-07-03
 
 ### Fixed

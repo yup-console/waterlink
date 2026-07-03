@@ -169,6 +169,13 @@ class Player:
 
     async def _maybe_dispatch_voice_update(self) -> None:
         if not (self._voice_token and self._voice_endpoint and self._voice_session_id):
+            logger.debug(
+                "Guild %s: skipping voice dispatch, missing field(s) (token=%s endpoint=%s session=%s)",
+                self.guild_id,
+                bool(self._voice_token),
+                bool(self._voice_endpoint),
+                bool(self._voice_session_id),
+            )
             return
 
         session_id = self.node.require_session()
@@ -179,7 +186,16 @@ class Player:
                 "sessionId": self._voice_session_id,
             }
         }
-        await self.node.rest.update_player(session_id, self.guild_id, payload=payload)
+        try:
+            await self.node.rest.update_player(session_id, self.guild_id, payload=payload)
+        except Exception:
+            logger.exception(
+                "Guild %s: failed to dispatch voice update to node %s (session=%s)",
+                self.guild_id,
+                self.node.name,
+                self._voice_session_id,
+            )
+            raise
         self._connected_to_voice_gateway = True
         self._pending_voice_update.set()
 

@@ -7,5 +7,5 @@ free of any other imports to avoid circular dependencies.
 
 from __future__ import annotations
 
-__version__ = "1.0.2"
-__version_info__: tuple[int, int, int, str, int] = (1, 0, 2, "final", 0)
+__version__ = "1.0.3"
+__version_info__: tuple[int, int, int, str, int] = (1, 0, 3, "final", 0)

@@ -102,7 +102,8 @@ class RESTResponseError(RESTError):
     ) -> None:
         self.status = status
         self.body = body
-        super().__init__(f"HTTP {status}: {message}")
+        detail = f" — {body}" if body else ""
+        super().__init__(f"HTTP {status}: {message}{detail}")
 
 
 class TrackLoadError(WaterlinkError):

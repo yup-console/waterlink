@@ -31,9 +31,16 @@ class VoiceServerUpdate:
 
     @classmethod
     def from_payload(cls, data: dict[str, Any]) -> "VoiceServerUpdate":
+        endpoint = data.get("endpoint")
+        if endpoint:
+            # Lavalink v4 expects a bare host[:port] with no URI scheme.
+            # Discord's gateway payload normally already omits the scheme,
+            # but guard against it anyway since some library versions /
+            # proxies have been observed to include "wss://".
+            endpoint = endpoint.removeprefix("wss://").removeprefix("https://").rstrip("/")
         return cls(
             token=data["token"],
-            endpoint=data.get("endpoint"),
+            endpoint=endpoint,
             guild_id=int(data["guild_id"]),
         )
 
