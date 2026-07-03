@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-07-03
+
+### Fixed
+
+- `TitleCleaner` no longer reports a movie/film title as the artist when
+  it appears in the artist position with no explicit label (e.g.
+  `"Mulaqaat | Dream Girl | Ayushmann Khurrana | Meet Bros"` — a soundtrack
+  from the movie *Dream Girl* — now correctly resolves the artist to
+  `"Meet Bros"` instead of `"Dream Girl"`). A small built-in list of known
+  movie titles (`DEFAULT_MOVIE_TITLES`, extendable via
+  `TitleCleaner(extra_movie_titles=[...])`) is now excluded from artist
+  candidates and routed to `extra_tags` instead.
+- `Player.enqueue()` no longer silently does nothing when called after the
+  queue has naturally finished playing. Previously, `Queue.next()` left
+  `queue.current` pointing at the last-played track even once the queue
+  drained, so a subsequent `enqueue()` incorrectly believed something was
+  still playing and never restarted playback. Playback state is now
+  tracked explicitly and no longer relies on stale `queue.current`.
+
 ## [1.0.5] - 2026-07-03
 
 ### Fixed

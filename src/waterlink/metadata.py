@@ -34,6 +34,7 @@ __all__ = [
     "TitleCleaner",
     "clean_track",
     "DEFAULT_LABEL_SUFFIXES",
+    "DEFAULT_MOVIE_TITLES",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -169,6 +170,24 @@ _CAST_CONTEXT_WORDS = (
 _TOPIC_CHANNEL_RE = re.compile(r"\s*-\s*topic\s*$", re.IGNORECASE)
 _VEVO_SUFFIX_RE = re.compile(r"vevo\s*$", re.IGNORECASE)
 
+# A short Title-Case segment can be *either* a person's name ("Arijit
+# Singh") or a movie/film title ("Dream Girl", "Kabir Singh") — both are
+# 1-3 words of Title Case text, so `_has_person_name_shape` alone can't
+# tell them apart, and a bare movie-name segment (no "Movie:"/"Film:"
+# label attached) used to win the artist slot whenever it happened to sit
+# before the real singer segment. This is a best-effort list of common
+# short Bollywood/Indian-cinema titles that are otherwise indistinguishable
+# from a person's name; callers can extend it via
+# `TitleCleaner(extra_movie_titles=[...])`.
+DEFAULT_MOVIE_TITLES: tuple[str, ...] = (
+    "dream girl", "dream girl 2", "kabir singh", "pathaan", "jawan",
+    "animal", "tiger 3", "gadar 2", "rocky aur rani kii prem kahaani",
+    "brahmastra", "shershaah", "bhool bhulaiyaa", "bhool bhulaiyaa 2",
+    "housefull", "housefull 4", "housefull 5", "stree", "stree 2",
+    "chennai express", "sultan", "war", "pushpa", "pushpa 2",
+    "bajrangi bhaijaan", "padmaavat", "kalki 2898 ad",
+)
+
 
 @dataclass(slots=True, frozen=True)
 class CleanedMetadata:
@@ -213,6 +232,7 @@ class TitleCleaner:
         *,
         extra_label_names: tuple[str, ...] = (),
         extra_noise_phrases: tuple[str, ...] = (),
+        extra_movie_titles: tuple[str, ...] = (),
     ) -> None:
         self._label_names = {s.lower() for s in DEFAULT_LABEL_SUFFIXES} | {
             s.lower() for s in extra_label_names
@@ -220,6 +240,9 @@ class TitleCleaner:
         self._noise_phrases = tuple(
             p.lower() for p in (*_PLAIN_NOISE_PHRASES, *extra_noise_phrases)
         )
+        self._movie_titles = {s.lower() for s in DEFAULT_MOVIE_TITLES} | {
+            s.lower() for s in extra_movie_titles
+        }
 
     # -- public API ---------------------------------------------------------- #
 
@@ -245,8 +268,10 @@ class TitleCleaner:
         remaining = segments[1:]
 
         candidates: list[str] = []
+        candidates_after_movie: list[str] = []
         extra_tags: list[str] = []
         labeled_singer: str | None = None
+        movie_title_index: int | None = None
 
         # A "feat./ft." credit inside the title segment itself (not yet
         # split off) is a strong, unambiguous artist signal even though
@@ -282,17 +307,48 @@ class TitleCleaner:
                 extra_tags.append(cleaned_segment)
                 continue
 
+            if cleaned_segment.lower().strip() in self._movie_titles:
+                extra_tags.append(cleaned_segment)
+                if not candidates:
+                    # Movie title appeared before any name-like segment —
+                    # it's acting as a divider between itself and what
+                    # follows (typically the singer credit), e.g.
+                    # "Mulaqaat | Dream Girl | Ayushmann Khurrana | Meet
+                    # Bros". If names already preceded it, it's just
+                    # interleaved with cast/singer segments and shouldn't
+                    # override the normal first-wins ordering.
+                    movie_title_index = len(candidates)
+                continue
+
             if self._looks_like_label_or_noise(cleaned_segment):
                 extra_tags.append(cleaned_segment)
                 continue
 
-            candidates.append(self._normalize_artist(cleaned_segment))
+            normalized = self._normalize_artist(cleaned_segment)
+            candidates.append(normalized)
+            if movie_title_index is not None:
+                candidates_after_movie.append(normalized)
 
         if labeled_singer:
             artist_candidate: str | None = labeled_singer
             extra_tags.extend(candidates)
         else:
-            artist_candidate = self._pick_best_artist_candidate(candidates)
+            if candidates_after_movie:
+                # A movie title led the remaining segments, so everything
+                # after it is cast/singer credits with no positional
+                # signal left to lean on ("Dream Girl | Ayushmann Khurrana
+                # | Meet Bros" — both segments are equally name-shaped).
+                # Real-world credit blocks conventionally list cast before
+                # singers in this layout, so the *last* name-like segment
+                # is preferred here specifically (opposite of the general
+                # first-wins rule below).
+                name_like = [
+                    c for c in candidates_after_movie if self._has_person_name_shape(c)
+                ]
+                pool = name_like or candidates_after_movie
+                artist_candidate = self._trim_trailing_names(pool[-1])
+            else:
+                artist_candidate = self._pick_best_artist_candidate(candidates)
             for candidate in candidates:
                 if candidate != artist_candidate:
                     extra_tags.append(candidate)
@@ -396,6 +452,13 @@ class TitleCleaner:
         caller via `_looks_like_label_or_noise`), not to rank among ones
         that do. The exception is a single merged segment mixing cast and
         singers with no separator, handled by :meth:`_trim_trailing_names`.
+
+        When a recognized movie title was present in the segment list, the
+        caller passes only the candidates that appeared *after* it — the
+        movie name acts as a divider, and the singer credit conventionally
+        follows it (e.g. ``Mulaqaat | Dream Girl | Ayushmann Khurrana |
+        Meet Bros``, where "Meet Bros" is the singer). If nothing follows
+        the movie title, the caller falls back to the full candidate list.
         """
 
         if not candidates:

@@ -72,6 +72,14 @@ class Player:
         self._connected_to_voice_gateway: bool = False
         self._ping_ms: int = -1
 
+        # Whether a track is currently loaded on the Lavalink node (playing
+        # or paused). Distinct from `queue.current is not None`, because
+        # the queue keeps `current` pointing at the last-played track even
+        # after playback naturally ends (QueueEmptyError) — using that
+        # alone to decide whether to (re)start playback would make a new
+        # `enqueue()` call after the queue drains silently do nothing.
+        self._is_active: bool = False
+
         self._pending_voice_update: asyncio.Event = asyncio.Event()
         self._destroyed: bool = False
 
@@ -85,7 +93,7 @@ class Player:
 
     @property
     def is_playing(self) -> bool:
-        return self.queue.current is not None and not self.paused
+        return self._is_active and not self.paused
 
     async def connect(
         self,
@@ -224,6 +232,7 @@ class Player:
         try:
             next_track = self.queue.next()
         except QueueEmptyError:
+            self._is_active = False
             self.pool.events.dispatch(QueueEndEvent(player=self))
             return
         await self.play(next_track, replace=True)
@@ -263,6 +272,7 @@ class Player:
             session_id, self.guild_id, payload=payload, no_replace=not replace
         )
         self.paused = pause
+        self._is_active = True
         return track
 
     async def enqueue(self, track: Track, *, play_now: bool = False) -> None:
@@ -273,7 +283,14 @@ class Player:
         else:
             self.queue.add(track)
 
-        if self.queue.current is None and not self.is_playing:
+        # `queue.current` still points at the last-played track even after
+        # the queue has drained (QueueEmptyError doesn't clear it), so it
+        # can't be used alone to tell "nothing is loaded right now". Check
+        # `_is_active` (whether *any* track — playing or paused — is
+        # currently loaded on the node) rather than `is_playing`, which
+        # would also be False while legitimately paused and wrongly kick
+        # off a new track on top of the paused one.
+        if not self._is_active:
             await self._advance_queue()
 
     async def skip(self) -> Track | None:
@@ -303,6 +320,7 @@ class Player:
             session_id, self.guild_id, payload={"track": {"encoded": None}}
         )
         self.queue.requeue_current()
+        self._is_active = False
 
     async def pause(self, paused: bool = True) -> None:
         session_id = self.node.require_session()
