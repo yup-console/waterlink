@@ -33,6 +33,13 @@ def _check_range(name: str, value: float, lo: float, hi: float) -> None:
         raise InvalidFilterValueError(f"{name} must be between {lo} and {hi}, got {value}")
 
 
+_FILTER_PRESET_NAMES: tuple[str, ...] = (
+    "nightcore", "vaporwave", "eight_d", "karaoke_mode", "bass_boosted",
+    "party", "slowed_reverb", "chipmunk", "deep_voice", "robot",
+    "underwater", "concert_hall", "mono", "earthquake", "soft",
+)
+
+
 @dataclass(slots=True, frozen=True)
 class EqualizerBand:
     band: int
@@ -56,6 +63,57 @@ class Equalizer:
     @classmethod
     def bass_boost(cls) -> "Equalizer":
         gains = [0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        return cls(bands=tuple(EqualizerBand(i, g) for i, g in enumerate(gains)))
+
+    @classmethod
+    def deep_bass(cls) -> "Equalizer":
+        """A stronger low-end boost than :meth:`bass_boost`, for
+        bass-heavy genres (EDM, hip-hop) rather than general listening."""
+
+        gains = [0.85, 0.7, 0.55, 0.4, 0.25, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        return cls(bands=tuple(EqualizerBand(i, g) for i, g in enumerate(gains)))
+
+    @classmethod
+    def vocal_boost(cls) -> "Equalizer":
+        """Emphasizes the ~1-4kHz range where vocals sit, useful for
+        podcasts, acapella, or making lyrics stand out over instrumentals."""
+
+        gains = [0.0, 0.0, 0.0, 0.1, 0.2, 0.3, 0.35, 0.3, 0.25, 0.15, 0.1, 0.0, 0.0, 0.0, 0.0]
+        return cls(bands=tuple(EqualizerBand(i, g) for i, g in enumerate(gains)))
+
+    @classmethod
+    def treble_boost(cls) -> "Equalizer":
+        """Brightens high frequencies — cymbals, hi-hats, sibilance,
+        useful for muddy-sounding low-bitrate sources."""
+
+        gains = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.05, 0.15, 0.25, 0.35, 0.4, 0.45, 0.45, 0.4, 0.35]
+        return cls(bands=tuple(EqualizerBand(i, g) for i, g in enumerate(gains)))
+
+    @classmethod
+    def loudness_equal(cls) -> "Equalizer":
+        """A gentle smiley-face curve (lifted bass and treble, flat mids)
+        that keeps quieter passages punchy without harsh clipping —
+        approximates a "loudness" toggle on a hi-fi amplifier."""
+
+        gains = [0.25, 0.2, 0.1, 0.0, -0.05, -0.1, -0.1, -0.1, -0.05, 0.0, 0.1, 0.15, 0.2, 0.25, 0.3]
+        return cls(bands=tuple(EqualizerBand(i, g) for i, g in enumerate(gains)))
+
+    @classmethod
+    def acoustic(cls) -> "Equalizer":
+        """Softens harsh highs and adds warmth for acoustic/unplugged
+        tracks (guitars, pianos, live vocals)."""
+
+        gains = [0.15, 0.15, 0.1, 0.05, 0.0, 0.0, 0.05, 0.1, 0.1, 0.05, 0.0, -0.05, -0.1, -0.1, -0.1]
+        return cls(bands=tuple(EqualizerBand(i, g) for i, g in enumerate(gains)))
+
+    @classmethod
+    def clarity(cls) -> "Equalizer":
+        """A mild, general-purpose "sounds better on cheap speakers"
+        curve: slight bass lift, scooped low-mids to reduce muddiness,
+        slight presence lift. A good sane default for phone/laptop
+        speakers rather than a specific genre EQ."""
+
+        gains = [0.15, 0.1, 0.0, -0.05, -0.1, -0.05, 0.0, 0.05, 0.1, 0.1, 0.05, 0.0, 0.0, 0.0, 0.0]
         return cls(bands=tuple(EqualizerBand(i, g) for i, g in enumerate(gains)))
 
     def to_payload(self) -> list[JSONDict]:
@@ -189,7 +247,8 @@ class FilterChain:
 
     Use the ``set_*`` methods to fluently configure filters, then pass the
     chain to :meth:`Player.set_filters`. Setting a filter to ``None``
-    removes it from the outgoing payload.
+    removes it from the outgoing payload. For common combined effects,
+    see the ``FilterPresets`` class methods, e.g. ``FilterChain.nightcore()``.
     """
 
     volume: float | None = None
@@ -203,6 +262,145 @@ class FilterChain:
     channel_mix: ChannelMix | None = None
     low_pass: LowPass | None = None
     plugin_filters: JSONDict = field(default_factory=dict)
+
+    @classmethod
+    def nightcore(cls) -> "FilterChain":
+        """Sped-up, pitched-up effect popular for "nightcore" remixes."""
+
+        return cls(timescale=Timescale(speed=1.2, pitch=1.2, rate=1.0))
+
+    @classmethod
+    def vaporwave(cls) -> "FilterChain":
+        """Slowed-down, pitched-down effect popular for "vaporwave" edits."""
+
+        return cls(timescale=Timescale(speed=0.8, pitch=0.8, rate=1.0))
+
+    @classmethod
+    def eight_d(cls) -> "FilterChain":
+        """Simulated "8D audio" — slowly rotating stereo panning that
+        makes the sound seem to circle around the listener's head.
+        Works best with headphones."""
+
+        return cls(rotation=Rotation(rotation_hz=0.15))
+
+    @classmethod
+    def karaoke_mode(cls) -> "FilterChain":
+        """Attempts to suppress center-panned vocals, approximating a
+        karaoke/instrumental track. Effectiveness varies a lot by song —
+        it works by phase-cancelling audio that's identical in both
+        channels, which is where lead vocals are usually mixed, but any
+        other centered elements (bass, kick drum) are affected too."""
+
+        return cls(karaoke=Karaoke(level=1.0, mono_level=1.0, filter_band=220.0, filter_width=100.0))
+
+    @classmethod
+    def bass_boosted(cls) -> "FilterChain":
+        """Equalizer-only bass boost — see ``Equalizer.bass_boost()``."""
+
+        return cls(equalizer=Equalizer.bass_boost())
+
+    @classmethod
+    def party(cls) -> "FilterChain":
+        """A punchier, louder-feeling preset combining deep bass with a
+        slight loudness curve — good default for group listening."""
+
+        return cls(equalizer=Equalizer.deep_bass(), volume=1.1)
+
+    @classmethod
+    def slowed_reverb(cls) -> "FilterChain":
+        """"Slowed + reverb" lo-fi edit style: slowed down without pitch
+        correction and a touch of low-pass warmth."""
+
+        return cls(timescale=Timescale(speed=0.85, pitch=0.9, rate=1.0), low_pass=LowPass(smoothing=12.0))
+
+    @classmethod
+    def chipmunk(cls) -> "FilterChain":
+        """Extreme pitch-up effect for a helium/chipmunk voice sound."""
+
+        return cls(timescale=Timescale(speed=1.0, pitch=1.6, rate=1.0))
+
+    @classmethod
+    def deep_voice(cls) -> "FilterChain":
+        """Extreme pitch-down effect for a deep, demonic voice sound."""
+
+        return cls(timescale=Timescale(speed=1.0, pitch=0.6, rate=1.0))
+
+    @classmethod
+    def robot(cls) -> "FilterChain":
+        """A robotic, vocoder-ish texture using fast tremolo modulation."""
+
+        return cls(tremolo=Tremolo(frequency=12.0, depth=0.7))
+
+    @classmethod
+    def underwater(cls) -> "FilterChain":
+        """Muffled, underwater-sounding effect via aggressive low-pass."""
+
+        return cls(low_pass=LowPass(smoothing=35.0), timescale=Timescale(speed=0.97, pitch=0.97, rate=1.0))
+
+    @classmethod
+    def concert_hall(cls) -> "FilterChain":
+        """A wider, more spacious stereo image approximating a live venue,
+        via subtle channel mixing plus a small amount of low-pass warmth."""
+
+        return cls(
+            channel_mix=ChannelMix(
+                left_to_left=0.9, left_to_right=0.1, right_to_left=0.1, right_to_right=0.9
+            ),
+            low_pass=LowPass(smoothing=8.0),
+        )
+
+    @classmethod
+    def mono(cls) -> "FilterChain":
+        """Collapses stereo to mono — useful for single-speaker Bluetooth
+        devices or accessibility."""
+
+        return cls(
+            channel_mix=ChannelMix(
+                left_to_left=0.5, left_to_right=0.5, right_to_left=0.5, right_to_right=0.5
+            )
+        )
+
+    @classmethod
+    def earthquake(cls) -> "FilterChain":
+        """An intense, distorted low-end rumble effect."""
+
+        return cls(
+            equalizer=Equalizer.deep_bass(),
+            distortion=Distortion(sin_scale=1.2, cos_scale=1.2, tan_scale=0.4),
+        )
+
+    @classmethod
+    def soft(cls) -> "FilterChain":
+        """A gentle, rounded-off sound with reduced harshness — good for
+        late-night/low-volume listening."""
+
+        return cls(equalizer=Equalizer.acoustic(), low_pass=LowPass(smoothing=6.0))
+
+    @classmethod
+    def preset_names(cls) -> tuple[str, ...]:
+        """Names usable with :meth:`from_preset`, handy for building a
+        slash-command choice list."""
+
+        return _FILTER_PRESET_NAMES
+
+    @classmethod
+    def from_preset(cls, name: str) -> "FilterChain":
+        """Look up a preset by name (see :meth:`preset_names`).
+
+        Raises :class:`~waterlink.errors.FilterError` if ``name`` isn't a
+        recognized preset.
+        """
+
+        normalized = name.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized == "8d":
+            normalized = "eight_d"
+        if normalized not in _FILTER_PRESET_NAMES:
+            from .errors import FilterError
+
+            raise FilterError(
+                f"Unknown filter preset {name!r}. Available presets: {', '.join(_FILTER_PRESET_NAMES)}"
+            )
+        return getattr(cls, normalized)()
 
     def set_volume(self, volume: float | None) -> "FilterChain":
         if volume is not None:

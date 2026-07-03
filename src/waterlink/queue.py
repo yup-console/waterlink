@@ -118,6 +118,33 @@ class Queue:
         del self._tracks[from_index]
         self._tracks.insert(to_index, track)
 
+    def jump_to(self, index: int) -> Track:
+        """Discard all queued tracks up to and including ``index``, set the
+        track at ``index`` as current, and return it — i.e. skip ahead in
+        the queue. Raises :class:`InvalidQueueIndexError` if out of range.
+        """
+
+        if not (0 <= index < len(self._tracks)):
+            raise InvalidQueueIndexError(f"No track at index {index}")
+        for _ in range(index):
+            self._tracks.popleft()
+        track = self._tracks.popleft()
+        if self._current is not None:
+            self._history.append(self._current)
+        self._current = track
+        return track
+
+    def estimated_wait_ms(self, index: int) -> int:
+        """Estimated milliseconds until the track at ``index`` would start
+        playing, assuming everything ahead of it plays to completion.
+        Streams (infinite length) ahead of it make this unbounded; in that
+        case the return value reflects only the finite tracks summed.
+        """
+
+        if not (0 <= index < len(self._tracks)):
+            raise InvalidQueueIndexError(f"No track at index {index}")
+        return sum(t.length_ms for t in list(self._tracks)[:index] if t.is_finite)
+
     def clear(self) -> None:
         self._tracks.clear()
 
@@ -125,6 +152,32 @@ class Queue:
         items = list(self._tracks)
         (rng or random).shuffle(items)
         self._tracks = deque(items)
+
+    def smart_shuffle(self, *, rng: random.Random | None = None) -> None:
+        """Shuffle while avoiding placing two tracks by the same artist
+        back-to-back where possible.
+
+        Falls back to a plain shuffle result where it's unavoidable (e.g.
+        the queue is dominated by one artist) rather than looping forever
+        trying to find a perfect arrangement.
+        """
+
+        items = list(self._tracks)
+        chosen_rng = rng or random
+        chosen_rng.shuffle(items)
+
+        result: list[Track] = []
+        remaining = items
+        while remaining:
+            last_author = result[-1].author if result else None
+            # Prefer a track by a different artist than the last one placed.
+            pick_index = next(
+                (i for i, t in enumerate(remaining) if t.author != last_author),
+                0,  # nothing better available; take whatever's next
+            )
+            result.append(remaining.pop(pick_index))
+
+        self._tracks = deque(result)
 
     def deduplicate(self, *, key: str = "identifier") -> int:
         """Remove duplicate upcoming tracks, keeping first occurrences.

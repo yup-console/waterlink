@@ -34,14 +34,63 @@ def test_extracts_feat_artist_from_title():
     assert r.artist == "Real Artist"
 
 
-def test_prefers_multi_name_segment_over_single_place_name():
+def test_prefers_name_segment_immediately_after_title_over_single_movie_name():
     c = TitleCleaner()
     r = c.clean(
-        title="Raataan Lambiyan | Full Video Song | Shershaah | Sidharth - Kiara | Tanishk B, Jubin N, Asees K",
+        title="Kal Ho Naa Ho | Sonu Nigam | Full Song",
+        author="Zee Music Company",
+    )
+    assert r.title == "Kal Ho Naa Ho"
+    assert r.artist == "Sonu Nigam"
+
+
+def test_picks_real_singer_over_cast_names_in_merged_segment():
+    # Real-world bug report: a single comma-separated segment mixing
+    # actors (Ranveer Singh, Sara Arjun) with the actual singer/composer
+    # (Shashwat Sachdev, Arijit Singh) must resolve to the trailing
+    # singer/composer names, not the leading cast names.
+    c = TitleCleaner()
+    r = c.clean(
+        title="Gehra Hua | Ranveer Singh, Sara Arjun, Shashwat Sachdev, Arijit Singh",
         author="T-Series",
     )
-    assert r.title == "Raataan Lambiyan"
-    assert r.artist == "Tanishk B, Jubin N, Asees K"
+    assert r.title == "Gehra Hua"
+    assert r.artist == "Shashwat Sachdev, Arijit Singh"
+
+
+def test_picks_real_singer_over_separate_cast_segment():
+    c = TitleCleaner()
+    r = c.clean(
+        title="Kesariya | Arijit Singh | Brahmastra | Ranbir Kapoor, Alia Bhatt",
+        author="T-Series",
+    )
+    assert r.artist == "Arijit Singh"
+
+
+def test_explicit_singer_label_wins_outright():
+    c = TitleCleaner()
+    r = c.clean(
+        title="Gehra Hua - Dhurandhar | Singer: Arijit Singh | Ranveer Singh, Sara Arjun",
+        author="T-Series",
+    )
+    assert r.artist == "Arijit Singh"
+
+
+def test_composer_label_is_not_used_as_artist():
+    # Composer/lyricist is a different role than the performing artist —
+    # waterlink should never report a composer as "the artist".
+    c = TitleCleaner()
+    r = c.clean(title="Some Song | Composed by Pritam | Cast: Actor One, Actor Two", author="T-Series")
+    assert r.artist != "Pritam"
+
+
+def test_singer_label_wins_even_when_composer_label_present():
+    c = TitleCleaner()
+    r = c.clean(
+        title="Some Song | Composed by Pritam | Singer: Arijit Singh | Cast: Actor One, Actor Two",
+        author="T-Series",
+    )
+    assert r.artist == "Arijit Singh"
 
 
 def test_leaves_clean_metadata_unchanged():

@@ -134,6 +134,33 @@ _FEAT_RE = re.compile(r"\b(?:feat\.?|ft\.?|featuring)\b", re.IGNORECASE)
 _MULTI_SPACE_RE = re.compile(r"\s{2,}")
 _TRAILING_PUNCT_RE = re.compile(r"^[\s\-\|:–—]+|[\s\-\|:–—]+$")
 
+# Explicit role labels sometimes present in a segment, e.g.
+# "Singer: Arijit Singh" or "Music by Pritam" or "Cast: Ranveer Singh".
+# When present, these are the strongest possible signal and are checked
+# before any other heuristic.
+_SINGER_LABEL_RE = re.compile(
+    r"^(?:singer|sung\s*by|vocals?(?:\s*by)?|singers?)\s*[:\-]?\s*", re.IGNORECASE
+)
+_COMPOSER_LABEL_RE = re.compile(
+    r"^(?:music(?:\s*(?:by|composed\s*by))?|composed\s*by|composer|"
+    r"lyrics?(?:\s*by)?|written\s*by)\s*[:\-]?\s*",
+    re.IGNORECASE,
+)
+_CAST_LABEL_RE = re.compile(
+    r"^(?:starring|cast(?:\s*by)?|actors?|feat(?:uring)?\s*cast)\s*[:\-]?\s*",
+    re.IGNORECASE,
+)
+_MOVIE_LABEL_RE = re.compile(r"^(?:movie|film|from\s*the\s*movie|album)\s*[:\-]?\s*", re.IGNORECASE)
+
+# Words that mark a segment as a cast/starring credit even without an
+# explicit "Cast:" label — this is the single most common failure mode
+# for Bollywood-style titles, where a comma-separated list of lead actors
+# is placed *before* the singer/composer segment and both look equally
+# "name-shaped" to a naive heuristic.
+_CAST_CONTEXT_WORDS = (
+    "starring", "cast", "movie", "film", "ft. cast", "actor", "actress",
+)
+
 # YouTube auto-generates "<Artist> - Topic" channels for algorithmically
 # organized music uploads. The channel name IS the artist name here, just
 # with this suffix tacked on, so it's handled separately from the label
@@ -219,6 +246,7 @@ class TitleCleaner:
 
         candidates: list[str] = []
         extra_tags: list[str] = []
+        labeled_singer: str | None = None
 
         # A "feat./ft." credit inside the title segment itself (not yet
         # split off) is a strong, unambiguous artist signal even though
@@ -234,15 +262,40 @@ class TitleCleaner:
             cleaned_segment = self._strip_noise(segment)
             if not cleaned_segment:
                 continue
+
+            # An explicit "Singer:" label is the strongest possible signal
+            # and always wins outright, regardless of position or shape.
+            singer_match = _SINGER_LABEL_RE.match(cleaned_segment)
+            if singer_match:
+                labeled_singer = cleaned_segment[singer_match.end():].strip(" .,-")
+                continue
+
+            # Composer/lyricist credits are a different role than the
+            # performing artist — waterlink only reports the singer, so
+            # these are dropped rather than used as the artist.
+            composer_match = _COMPOSER_LABEL_RE.match(cleaned_segment)
+            if composer_match:
+                extra_tags.append(cleaned_segment)
+                continue
+
+            if _CAST_LABEL_RE.match(cleaned_segment) or _MOVIE_LABEL_RE.match(cleaned_segment):
+                extra_tags.append(cleaned_segment)
+                continue
+
             if self._looks_like_label_or_noise(cleaned_segment):
                 extra_tags.append(cleaned_segment)
                 continue
+
             candidates.append(self._normalize_artist(cleaned_segment))
 
-        artist_candidate = self._pick_best_artist_candidate(candidates)
-        for candidate in candidates:
-            if candidate != artist_candidate:
-                extra_tags.append(candidate)
+        if labeled_singer:
+            artist_candidate: str | None = labeled_singer
+            extra_tags.extend(candidates)
+        else:
+            artist_candidate = self._pick_best_artist_candidate(candidates)
+            for candidate in candidates:
+                if candidate != artist_candidate:
+                    extra_tags.append(candidate)
 
         final_author = author.strip()
         if self._looks_like_label_or_noise(final_author) and artist_candidate:
@@ -325,30 +378,73 @@ class TitleCleaner:
         return False
 
     def _pick_best_artist_candidate(self, candidates: list[str]) -> str | None:
-        """Score candidate segments and return the most name-like one.
+        """Pick the most likely singer/artist segment among several.
 
-        Prefers segments that look like a list of person names (Title
-        Case words, possibly comma/ampersand separated) over segments
-        that look like a movie/album/project name (a single long phrase
-        with no commas). This is a heuristic, not a guarantee — when in
-        doubt we keep the first candidate rather than the "best" one.
+        The dominant real-world convention (Bollywood soundtracks
+        especially) is: song title, then singer(s)/composer(s) segment,
+        then movie/cast segment(s) — e.g.::
+
+            Kesariya | Arijit Singh | Brahmastra | Ranbir Kapoor, Alia Bhatt
+            Chaleya | Anirudh, Arijit Singh, Shilpa Rao | Shah Rukh Khan, Nayanthara
+
+        So among segments that plausibly look like person names, the
+        *first* one is preferred outright — position (proximity to the
+        title) is a stronger signal than how name-dense a later segment
+        looks, since cast segments are often just as (or more) name-dense
+        than the singer segment. Density is only used to filter out
+        segments that don't look like names at all (already done by the
+        caller via `_looks_like_label_or_noise`), not to rank among ones
+        that do. The exception is a single merged segment mixing cast and
+        singers with no separator, handled by :meth:`_trim_trailing_names`.
         """
 
         if not candidates:
             return None
-        if len(candidates) == 1:
-            return candidates[0]
 
-        def score(segment: str) -> tuple[int, int]:
-            has_name_separator = bool(re.search(r",|&|\band\b", segment, re.IGNORECASE))
-            words = segment.split()
-            title_case_ratio = sum(1 for w in words if w[:1].isupper()) / max(len(words), 1)
-            # Higher is better: name-separator presence first, then how
-            # "Title Case"-heavy the segment is (person names tend to be
-            # fully capitalized; movie taglines/descriptions vary more).
-            return (1 if has_name_separator else 0, int(title_case_ratio * 100))
+        name_like = [c for c in candidates if self._has_person_name_shape(c)]
+        pool = name_like or candidates
+        return self._trim_trailing_names(pool[0])
 
-        return max(candidates, key=score)
+    def _has_person_name_shape(self, segment: str) -> bool:
+        """Whether a segment looks like it's made of person name(s) rather
+        than a movie/album/project title.
+
+        Movie titles are usually a single run of Title Case words with no
+        list separator (e.g. "Rocky Aur Rani Kii Prem Kahaani",
+        "Shershaah"). Person-name lists are either a single short
+        (<= 3 word) name, or multiple names joined by a comma/ampersand.
+        This isn't foolproof — some movie titles are short enough to look
+        like a name, and some singer credits are a single word — but it
+        correctly separates the common cases in practice.
+        """
+
+        words = [w for w in re.split(r"[\s,&]+", segment) if w]
+        if not words:
+            return False
+        title_case_ratio = sum(1 for w in words if w[:1].isupper()) / len(words)
+        if title_case_ratio < 0.6:
+            return False
+        has_list_separator = bool(re.search(r",|&|\band\b", segment, re.IGNORECASE))
+        # A short (<=3 word) Title Case phrase is plausibly a single
+        # person's name (e.g. "Arijit Singh", "Sonu Nigam"). Anything
+        # longer without a list separator reads as a title/phrase instead
+        # (e.g. "Rocky Aur Rani Kii Prem Kahaani").
+        return has_list_separator or len(words) <= 3
+
+    def _trim_trailing_names(self, segment: str) -> str:
+        """When a single segment is a comma-separated list of 4+ names,
+        real-world credit ordering strongly suggests the list mixes
+        cast/movie names first and singer(s)/composer(s) last. Long lists
+        (4+ names) are trimmed to roughly the trailing half; shorter lists
+        (2-3 names, typically all singers on a duet/trio track) are left
+        intact since trimming would likely remove a real co-singer.
+        """
+
+        parts = [p.strip() for p in segment.split(",") if p.strip()]
+        if len(parts) < 4:
+            return segment
+        midpoint = len(parts) // 2
+        return ", ".join(parts[midpoint:])
 
     def _normalize_artist(self, segment: str) -> str:
         # If it's a "feat. X" style segment, keep only the featured artist

@@ -287,6 +287,14 @@ class Player:
         )
         return self.queue.current
 
+    async def jump_to(self, index: int) -> Track:
+        """Skip ahead to the track at ``index`` in the upcoming queue,
+        discarding everything before it, and start playing it immediately.
+        """
+
+        track = self.queue.jump_to(index)
+        return await self.play(track, replace=True)
+
     async def stop(self) -> None:
         """Stop playback without advancing the queue."""
 
@@ -311,6 +319,31 @@ class Player:
         )
         self._last_position_ms = position_ms
         self._last_position_at = time.monotonic()
+
+    async def seek_forward(self, offset_ms: int) -> None:
+        """Seek forward by ``offset_ms`` from the current position,
+        clamped to the track's length."""
+
+        track = self.queue.current
+        target = self.position_ms + offset_ms
+        if track is not None and track.is_finite:
+            target = min(target, track.length_ms)
+        await self.seek(max(0, target))
+
+    async def seek_backward(self, offset_ms: int) -> None:
+        """Seek backward by ``offset_ms`` from the current position,
+        clamped to the start of the track."""
+
+        await self.seek(max(0, self.position_ms - offset_ms))
+
+    async def previous(self) -> Track:
+        """Replay the last historical track, pushing the current one back
+        onto the queue. Raises :class:`~waterlink.errors.QueueEmptyError`
+        if there's no history.
+        """
+
+        track = self.queue.previous()
+        return await self.play(track, replace=True)
 
     async def set_volume(self, volume: int) -> None:
         volume = max(0, min(1000, volume))

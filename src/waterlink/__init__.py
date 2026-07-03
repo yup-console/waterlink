@@ -87,11 +87,12 @@ from .filters import (
     Tremolo,
     Vibrato,
 )
-from .formatting import format_duration, progress_bar, queue_page, track_line
+from .formatting import format_duration, now_playing_summary, progress_bar, queue_page, track_line
 from .manager import WaterlinkClient
 from .metadata import CleanedMetadata, TitleCleaner, clean_track
 from .metrics import MetricsCollector
 from .node import Node, NodeStats
+from .normalize import NormalizationConfig, VolumeNormalizer
 from .persistence import (
     InMemoryBackend,
     JSONFileBackend,
@@ -175,6 +176,9 @@ __all__ = [
     "related_track_strategy",
     "CrossfadeController",
     "CrossfadeConfig",
+    # normalization
+    "NormalizationConfig",
+    "VolumeNormalizer",
     # metadata cleaning
     "TitleCleaner",
     "CleanedMetadata",
@@ -205,6 +209,7 @@ __all__ = [
     "progress_bar",
     "track_line",
     "queue_page",
+    "now_playing_summary",
     # errors
     "WaterlinkError",
     "ConfigurationError",

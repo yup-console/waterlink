@@ -6,6 +6,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-07-03
+
+### Fixed
+
+- `TitleCleaner` no longer picks cast/actor names over the real
+  singer/composer when a title mixes both (e.g. Bollywood credits like
+  `"Gehra Hua | Ranveer Singh, Sara Arjun, Shashwat Sachdev, Arijit Singh"`
+  now correctly resolves to `"Shashwat Sachdev, Arijit Singh"`, not the
+  actors). Explicit `"Singer: X"` labels are now detected and take
+  priority outright.
+- `artist` now only ever reflects the performing singer — an explicit
+  `"Composed by X"` / `"Music: X"` / `"Lyrics: X"` label is recognized
+  and excluded rather than being reported as the artist.
+
+### Added
+
+- 10 new `FilterChain` presets on top of the original set: `slowed_reverb`,
+  `chipmunk`, `deep_voice`, `robot`, `underwater`, `concert_hall`, `mono`,
+  `earthquake`, `soft` — alongside `nightcore`, `vaporwave`, `eight_d`,
+  `karaoke_mode`, `bass_boosted`, `party`.
+- `FilterChain.from_preset(name)` / `FilterChain.preset_names()` — look
+  up any preset by string name, handy for slash-command choice lists.
+- New `Equalizer` presets: `deep_bass`, `vocal_boost`, `treble_boost`,
+  `loudness_equal`, `acoustic`, `clarity`.
+- `Player.seek_forward()` / `Player.seek_backward()` — relative seeking.
+- `Player.previous()` — replay the last track from history.
+- `Queue.smart_shuffle()` — shuffles while avoiding back-to-back tracks
+  by the same artist where possible.
+- `Queue.jump_to()` / `Player.jump_to()` — skip ahead to an arbitrary
+  queue position.
+- `Queue.estimated_wait_ms()` — estimated time until a queued track
+  would start playing.
+- `waterlink.normalize` module (`VolumeNormalizer`, `NormalizationConfig`)
+  — smooths jarring volume jumps between tracks mastered at different
+  loudness levels.
+- `waterlink.now_playing_summary()` — ready-made "now playing" text with
+  progress bar, status, and loop mode for embeds.
+
 ## [1.0.4] - 2026-07-03
 
 ### Fixed

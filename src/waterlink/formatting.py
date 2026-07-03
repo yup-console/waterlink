@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .tracks import Track
 
-__all__ = ["format_duration", "progress_bar", "track_line", "queue_page"]
+__all__ = ["format_duration", "progress_bar", "track_line", "queue_page", "now_playing_summary"]
 
 
 def format_duration(ms: int) -> str:
@@ -73,3 +73,28 @@ def queue_page(
     if not lines:
         return "The queue is empty.", total_pages
     return "\n".join(lines), total_pages
+
+
+def now_playing_summary(
+    track: Track,
+    *,
+    position_ms: int,
+    paused: bool = False,
+    volume: int | None = None,
+    loop_mode: str | None = None,
+) -> str:
+    """A multi-line "now playing" summary suitable for a Discord embed
+    description — title, artist, progress bar, and status flags.
+    """
+
+    status = "⏸️ Paused" if paused else "▶️ Playing"
+    lines = [
+        f"**{track.title}**",
+        f"by {track.author}",
+        "",
+        progress_bar(position_ms, track.length_ms),
+        status + (f" • 🔊 {volume}%" if volume is not None else ""),
+    ]
+    if loop_mode and loop_mode != "off":
+        lines.append(f"🔁 Loop: {loop_mode}")
+    return "\n".join(lines)
