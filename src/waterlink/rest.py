@@ -57,9 +57,16 @@ class RESTClient:
         params: dict[str, Any] | None = None,
     ) -> Any:
         url = f"{self.base_url}{path}"
+        # Always ask Lavalink for the full error trace. It's a no-op on
+        # success and costs nothing, but turns an opaque generic
+        # {"message": "Bad Request"} into an actual diagnosable stack
+        # trace when something does go wrong.
+        merged_params: dict[str, Any] = {"trace": "true"}
+        if params:
+            merged_params.update(params)
         try:
             async with self._session.request(
-                method, url, json=json, params=params, headers=self._headers
+                method, url, json=json, params=merged_params, headers=self._headers
             ) as resp:
                 if resp.status == 204:
                     return None

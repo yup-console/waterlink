@@ -6,6 +6,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-07-03
+
+### Fixed
+
+- All REST requests now send `trace=true`, so if Lavalink ever rejects a
+  request the error you see includes its actual stack trace instead of a
+  generic `{"message": "Bad Request"}` with no detail — this was blocking
+  diagnosis of the voice-update 400 reported against the public
+  jirayu.net node.
+- The `voice` payload sent on player update now includes `channelId`
+  alongside `token`/`endpoint`/`sessionId`, matching the full voice state
+  shape rather than omitting a field some Lavalink versions/plugins may
+  expect.
+
+### Note
+
+If a `PATCH .../players/{guildId}` request still 400s after this update,
+the error message will now contain a full trace — please share that
+output so the exact cause (rather than a guess) can be fixed.
+
 ## [1.0.3] - 2026-07-03
 
 ### Fixed

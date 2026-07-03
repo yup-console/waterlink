@@ -186,6 +186,8 @@ class Player:
                 "sessionId": self._voice_session_id,
             }
         }
+        if self.channel_id is not None:
+            payload["voice"]["channelId"] = str(self.channel_id)
         try:
             await self.node.rest.update_player(session_id, self.guild_id, payload=payload)
         except Exception:
