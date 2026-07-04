@@ -19,4 +19,18 @@ player = await client.connect(guild_id, channel_id, strategy=waterlink.RoutingSt
 ```
 
 Nodes reconnect automatically with exponential backoff and resume their
-Lavalink session where possible.
+Lavalink session where possible. If the resume window has expired or the
+Lavalink process itself restarted, the session can't be resumed — in
+that case Lavalink has forgotten about every player that was attached to
+it. waterlink detects this (`NodeReadyEvent.resumed` is `False`) and
+automatically re-sends each affected player's voice state and current
+track (from its last known position) so playback picks back up instead
+of silently going quiet. You don't need to do anything for this to
+happen, but you can observe it via:
+
+```python
+@client.events.on(waterlink.NodeReadyEvent)
+async def on_node_ready(event: waterlink.NodeReadyEvent):
+    if not event.resumed:
+        print(f"{event.node.name} reconnected without resuming a session; players were resynced")
+```

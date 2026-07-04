@@ -27,11 +27,12 @@ install anything extra for voice support.
 - **Rich queue engine** — history, shuffle, dedupe, track/queue loop modes, priority insertion.
 - **Typed audio filters** — equalizer, timescale, karaoke, tremolo, vibrato, rotation, distortion, channel mix, low-pass, all validated.
 - **Autoplay** — keeps audio flowing with a pluggable "related track" strategy once the queue empties.
-- **Clean metadata** — turns noisy YouTube-style results like `"Tere Liye | Arijit Singh | Viral | T-Series"` by `"T-Series"` into title `"Tere Liye"` by artist `"Arijit Singh"`, opt-in per client or per search call.
+- **Source-aware metadata** — for YouTube results, shows the uploading channel as the artist instead of guessing a name out of the title text; for Spotify/Apple Music/Deezer/etc. it trusts the platform's real artist metadata as-is. Opt-in per client or per search call.
 - **Crossfade** — smooth client-side volume ramping across track transitions.
 - **State persistence** — snapshot and restore queues/players across bot restarts (JSON file backend included, or bring your own).
 - **Plugin helpers** — typed convenience wrappers for LavaSrc and SponsorBlock.
 - **Observability** — structured logging, an in-process metrics collector (with Prometheus text export), and a watchdog for stalled playback/stale nodes.
+- **Reconnect-resilient** — automatically resyncs voice state and resumes playback if a node's websocket drops and reconnects without a resumed Lavalink session, instead of silently going quiet.
 - **Fully typed** — ships a `py.typed` marker; passes `mypy --strict`.
 
 ## Installation
@@ -137,10 +138,20 @@ autoplay.enable(guild_id)
 
 ### Clean metadata
 
-YouTube search results are often uploaded by a label, not the artist —
-so `track.title` and `track.author` can come back as
-`"Tere Liye | Arijit Singh | Viral | T-Series"` / `"T-Series"` instead of
-`"Tere Liye"` / `"Arijit Singh"`. Enable automatic cleanup:
+Different sources report the artist differently, so waterlink handles
+them differently instead of guessing with one heuristic for everything:
+
+- **YouTube**: there's no real "artist" field, only a video title and an
+  uploader/channel name — so the **channel name is used as the artist**.
+  Title text is cleaned up for display but never mined to guess a
+  performer's name (that's unreliable — a title segment could be a
+  singer, a movie name, or a cast list, with no way to tell from text
+  alone).
+- **Spotify, Apple Music, Deezer, and other tagged sources**: these
+  already carry real artist metadata, so `track.author` is **trusted
+  as-is** and never rewritten.
+
+Enable automatic cleanup:
 
 ```python
 client = waterlink.WaterlinkClient(bot=bot, clean_metadata=True)
@@ -150,19 +161,28 @@ result = await client.search(query, clean=True)
 
 ```python
 track = result.tracks[0]
+
+# YouTube result:
 print(track.title)   # "Tere Liye"
-print(track.author)  # "Arijit Singh"
+print(track.author)  # "T-Series"  <- the channel name
 print(track.extra["raw_title"])   # original, untouched, if you need it
 print(track.extra["raw_author"])
+
+# Spotify result: author is left exactly as Spotify reported it.
 ```
 
-You can also clean a single track directly, or add your own label names
-(useful for regional labels not already in the default list):
+You can also clean a single track directly:
 
 ```python
 cleaned = waterlink.clean_track(track)
+```
 
-cleaner = waterlink.TitleCleaner(extra_label_names=("my regional label",))
+`TitleCleaner` also accepts `extra_noise_phrases` if there are extra
+marketing phrases (e.g. regional "New Song 2026"-style tags) you want
+stripped from displayed YouTube titles:
+
+```python
+cleaner = waterlink.TitleCleaner(extra_noise_phrases=("official channel",))
 cleaned = cleaner.clean_track(track)
 ```
 

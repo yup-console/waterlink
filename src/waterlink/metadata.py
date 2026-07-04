@@ -1,21 +1,33 @@
-"""Clean up messy YouTube-style track titles and uploader/label names.
+"""Clean up messy track titles and resolve a sensible "artist" per source.
 
-YouTube search results (and many other free sources) are frequently
-uploaded by record labels rather than the artist, so the raw metadata
-Lavalink hands back tends to look like this::
+Different Lavalink sources report the artist very differently, so this
+module branches on ``Track.source_name`` rather than applying one
+heuristic to everything:
 
-    title:  "Tere Liye | Arijit Singh | Viral | T-Series"
-    author: "T-Series"
+- **YouTube / YouTube Music**: there is no reliable "real artist" field —
+  Lavalink only gives us the title text and the name of the channel that
+  uploaded the video. Trying to guess a performer's name out of the title
+  (splitting on ``|``, matching "Singer:" labels, guessing which
+  Title-Case segment is a person vs. a movie, etc.) is inherently
+  unreliable and produces wrong answers as often as right ones. Instead,
+  the channel name is used as the artist, since that's the one piece of
+  information that's actually true - e.g.::
 
-...when what a user actually wants displayed is::
+      title:  "Tere Liye | Arijit Singh | Viral | T-Series"
+      author: "T-Series"
+      -> artist: "T-Series" (channel name; YouTube-only cosmetic
+         suffixes like " - Topic" / "VEVO" are still trimmed)
 
-    title:  "Tere Liye"
-    author: "Arijit Singh"
+- **Every other source** (Spotify, Apple Music, Deezer, SoundCloud with
+  proper tags, etc.): these platforms already carry real, structured
+  artist metadata, and Lavalink passes it straight through as
+  ``author``. No guessing is needed or wanted here - the author field
+  *is* the artist, so it's used as-is. Only cosmetic title noise (e.g.
+  bracketed "(Official Audio)" tags some catalogs still include) is
+  stripped from the title; the author is left untouched.
 
 This module never calls out to the network — it's a pure, deterministic
-text-processing layer over metadata already returned by Lavalink. It's
-intentionally conservative: when it isn't confident about a piece of
-metadata it leaves the original value alone rather than guessing wrong.
+text-processing layer over metadata already returned by Lavalink.
 
 Wire it in either per-track (:func:`clean_track`) or automatically for
 every search result (:class:`TitleCleaner` + :meth:`Player`/`WaterlinkClient`
@@ -33,61 +45,8 @@ __all__ = [
     "CleanedMetadata",
     "TitleCleaner",
     "clean_track",
-    "DEFAULT_LABEL_SUFFIXES",
-    "DEFAULT_MOVIE_TITLES",
+    "YOUTUBE_SOURCE_NAMES",
 ]
-
-# --------------------------------------------------------------------------- #
-# Known record label / channel suffixes that should never be shown as an
-# "artist" on their own. This list is deliberately focused on labels that
-# commonly upload under their own channel name rather than the performer's.
-# It's easy to extend via TitleCleaner(extra_label_names=[...]).
-# --------------------------------------------------------------------------- #
-
-DEFAULT_LABEL_SUFFIXES: tuple[str, ...] = (
-    "t-series",
-    "tseries",
-    "zee music company",
-    "zee music",
-    "sony music",
-    "sony music entertainment",
-    "sony music india",
-    "universal music",
-    "universal music group",
-    "warner music",
-    "warner records",
-    "believe digital",
-    "believe music",
-    "the orchard",
-    "orchard music",
-    "vevo",
-    "records",
-    "official",
-    "music company",
-    "entertainment",
-    "worldwide records",
-    "speed records",
-    "saregama",
-    "saregama music",
-    "tips official",
-    "tips music",
-    "eros now music",
-    "yrf",
-    "yash raj films",
-    "venus",
-    "venus movies",
-    "aditya music",
-    "lahari music",
-    "think music",
-    "sun music",
-    "wave music",
-    "desi music factory",
-    "white hill music",
-    "geet mp3",
-    "jjust music",
-    "juke dock",
-    "gaana originals",
-)
 
 # Segment separators commonly used to pack multiple metadata fields into
 # one YouTube title: pipes, bullets, en/em dashes, double dashes, standalone
@@ -135,57 +94,25 @@ _FEAT_RE = re.compile(r"\b(?:feat\.?|ft\.?|featuring)\b", re.IGNORECASE)
 _MULTI_SPACE_RE = re.compile(r"\s{2,}")
 _TRAILING_PUNCT_RE = re.compile(r"^[\s\-\|:–—]+|[\s\-\|:–—]+$")
 
-# Explicit role labels sometimes present in a segment, e.g.
-# "Singer: Arijit Singh" or "Music by Pritam" or "Cast: Ranveer Singh".
-# When present, these are the strongest possible signal and are checked
-# before any other heuristic.
-_SINGER_LABEL_RE = re.compile(
-    r"^(?:singer|sung\s*by|vocals?(?:\s*by)?|singers?)\s*[:\-]?\s*", re.IGNORECASE
-)
-_COMPOSER_LABEL_RE = re.compile(
-    r"^(?:music(?:\s*(?:by|composed\s*by))?|composed\s*by|composer|"
-    r"lyrics?(?:\s*by)?|written\s*by)\s*[:\-]?\s*",
-    re.IGNORECASE,
-)
-_CAST_LABEL_RE = re.compile(
-    r"^(?:starring|cast(?:\s*by)?|actors?|feat(?:uring)?\s*cast)\s*[:\-]?\s*",
-    re.IGNORECASE,
-)
-_MOVIE_LABEL_RE = re.compile(r"^(?:movie|film|from\s*the\s*movie|album)\s*[:\-]?\s*", re.IGNORECASE)
-
-# Words that mark a segment as a cast/starring credit even without an
-# explicit "Cast:" label — this is the single most common failure mode
-# for Bollywood-style titles, where a comma-separated list of lead actors
-# is placed *before* the singer/composer segment and both look equally
-# "name-shaped" to a naive heuristic.
-_CAST_CONTEXT_WORDS = (
-    "starring", "cast", "movie", "film", "ft. cast", "actor", "actress",
-)
-
 # YouTube auto-generates "<Artist> - Topic" channels for algorithmically
 # organized music uploads. The channel name IS the artist name here, just
-# with this suffix tacked on, so it's handled separately from the label
-# suffix list (which are uploader/label names to be *replaced*, not
-# artist names to be *trimmed*).
+# with this suffix tacked on.
 _TOPIC_CHANNEL_RE = re.compile(r"\s*-\s*topic\s*$", re.IGNORECASE)
 _VEVO_SUFFIX_RE = re.compile(r"vevo\s*$", re.IGNORECASE)
 
-# A short Title-Case segment can be *either* a person's name ("Arijit
-# Singh") or a movie/film title ("Dream Girl", "Kabir Singh") — both are
-# 1-3 words of Title Case text, so `_has_person_name_shape` alone can't
-# tell them apart, and a bare movie-name segment (no "Movie:"/"Film:"
-# label attached) used to win the artist slot whenever it happened to sit
-# before the real singer segment. This is a best-effort list of common
-# short Bollywood/Indian-cinema titles that are otherwise indistinguishable
-# from a person's name; callers can extend it via
-# `TitleCleaner(extra_movie_titles=[...])`.
-DEFAULT_MOVIE_TITLES: tuple[str, ...] = (
-    "dream girl", "dream girl 2", "kabir singh", "pathaan", "jawan",
-    "animal", "tiger 3", "gadar 2", "rocky aur rani kii prem kahaani",
-    "brahmastra", "shershaah", "bhool bhulaiyaa", "bhool bhulaiyaa 2",
-    "housefull", "housefull 4", "housefull 5", "stree", "stree 2",
-    "chennai express", "sultan", "war", "pushpa", "pushpa 2",
-    "bajrangi bhaijaan", "padmaavat", "kalki 2898 ad",
+# Lavalink `sourceName` values that represent YouTube. Everything else is
+# treated as a "structured metadata" source where the author field is
+# trusted as the real artist. Some plugins report YouTube Music results
+# under a different sourceName, so both variants are included defensively.
+YOUTUBE_SOURCE_NAMES: frozenset[str] = frozenset({"youtube", "youtube_music", "ytmusic"})
+
+# Cosmetic-only noise that can still show up in titles from non-YouTube,
+# already-tagged sources (e.g. a track re-uploaded with leftover
+# "(Official Audio)" text baked into the title). This is title-only
+# cleanup — the author from these sources is never touched.
+_TITLE_ONLY_BRACKET_NOISE_RE = re.compile(
+    r"[\(\[]\s*(?:official\s*)?(?:music\s*)?(?:audio|video|lyric(?:s|al)?)\s*[\)\]]",
+    re.IGNORECASE,
 )
 
 
@@ -198,9 +125,10 @@ class CleanedMetadata:
     original_title: str
     original_author: str
     extra_tags: tuple[str, ...] = ()
-    """Segments that were stripped from the title but didn't look like an
-    artist name either (e.g. "Viral", "T-Series") — kept around in case a
-    caller wants to display or log them."""
+    """Other segments found in a YouTube title (movie name, cast, "Viral",
+    label name, etc.) — kept around in case a caller wants to display or
+    log them. Empty for non-YouTube sources, since their titles aren't
+    segmented."""
 
     @property
     def was_changed(self) -> bool:
@@ -208,23 +136,16 @@ class CleanedMetadata:
 
 
 class TitleCleaner:
-    """Configurable engine for extracting a clean song title + artist name
-    from noisy source metadata (typically YouTube).
+    """Cleans noisy titles and resolves the artist per-source.
 
-    The algorithm:
-
-    1. Split the title on common separators (``|``, ``•``, `` - ``, etc.)
-       into segments.
-    2. The first segment is treated as the song title; noise phrases and
-       bracketed tags ("(Official Video)", "[Lyrics]") are stripped from it.
-    3. Remaining segments are classified as either a likely artist name or
-       a label/noise tag, using the label suffix list and a few heuristics
-       (ALL CAPS short codes, "records"/"music" suffixes, numeric/year-only
-       segments, generic marketing words).
-    4. If the uploader/author field itself matches a known label, and a
-       plausible artist segment was found in the title, the label is
-       replaced by that artist. Otherwise the original author is kept
-       unchanged — the cleaner never invents an artist name it didn't see.
+    - **YouTube**: the title is split on common separators (``|``, ``•``,
+      `` - ``, etc.); the first segment (noise-stripped) becomes the
+      display title, and the channel name (``author``, with cosmetic
+      "- Topic"/"VEVO" suffixes trimmed) is always the artist. See the
+      module docstring for why title text isn't mined for a performer
+      name.
+    - **Everything else**: ``author`` is trusted as the artist as-is;
+      only cosmetic bracketed noise is stripped from the title.
     """
 
     def __init__(
@@ -234,19 +155,46 @@ class TitleCleaner:
         extra_noise_phrases: tuple[str, ...] = (),
         extra_movie_titles: tuple[str, ...] = (),
     ) -> None:
-        self._label_names = {s.lower() for s in DEFAULT_LABEL_SUFFIXES} | {
-            s.lower() for s in extra_label_names
-        }
+        # `extra_label_names` / `extra_movie_titles` are accepted but no
+        # longer used: they only fed the old title-mining heuristic that
+        # tried to guess a "real artist" out of YouTube title text, which
+        # has been replaced with always using the channel name (see the
+        # module docstring). Kept as no-op parameters so existing
+        # `TitleCleaner(extra_label_names=[...])` call sites don't break.
         self._noise_phrases = tuple(
             p.lower() for p in (*_PLAIN_NOISE_PHRASES, *extra_noise_phrases)
         )
-        self._movie_titles = {s.lower() for s in DEFAULT_MOVIE_TITLES} | {
-            s.lower() for s in extra_movie_titles
-        }
 
     # -- public API ---------------------------------------------------------- #
 
-    def clean(self, *, title: str, author: str) -> CleanedMetadata:
+    def clean(
+        self, *, title: str, author: str, source_name: str = "youtube"
+    ) -> CleanedMetadata:
+        """Clean a raw title/author pair.
+
+        Parameters
+        ----------
+        source_name:
+            The Lavalink ``sourceName`` this metadata came from (e.g.
+            ``"youtube"``, ``"spotify"``, ``"applemusic"``). Determines
+            the strategy used:
+
+            - YouTube sources: the channel name (``author``) is used as
+              the artist, with only cosmetic YouTube suffixes (``" -
+              Topic"``, ``"VEVO"``) trimmed. Title text is *not* mined
+              for a "real" performer name — see the module docstring for
+              why that's unreliable.
+            - Any other source: ``author`` is trusted as-is (these
+              platforms already carry real artist metadata); only
+              cosmetic bracketed noise is stripped from the title.
+
+            Defaults to ``"youtube"`` for backwards compatibility with
+            callers that don't pass it.
+        """
+
+        if source_name not in YOUTUBE_SOURCE_NAMES:
+            return self._clean_non_youtube(title=title, author=author)
+
         original_title, original_author = title, author
 
         # "<Artist> - Topic" and "<Artist>VEVO" are YouTube auto-generated
@@ -267,107 +215,58 @@ class TitleCleaner:
         song_title = self._strip_noise(segments[0])
         remaining = segments[1:]
 
-        candidates: list[str] = []
-        candidates_after_movie: list[str] = []
-        extra_tags: list[str] = []
-        labeled_singer: str | None = None
-        movie_title_index: int | None = None
+        # YouTube's title text is just free-form text a human typed — it's
+        # not structured artist metadata. Anything else in the title
+        # (movie names, cast lists, composer credits, marketing tags) is
+        # kept around as `extra_tags` for callers that want it (e.g. to
+        # show a "from <movie>" line), but none of it is *guessed* to be
+        # the performer, because there's no reliable way to tell a singer
+        # credit apart from a cast/movie/label segment from text alone.
+        # The channel name is the one piece of metadata that's actually
+        # trustworthy, so it's always used as the artist here.
+        extra_tags: list[str] = [
+            cleaned for segment in remaining if (cleaned := self._strip_noise(segment))
+        ]
 
-        # A "feat./ft." credit inside the title segment itself (not yet
-        # split off) is a strong, unambiguous artist signal even though
-        # it lives in segment 0 — extract it before stripping.
+        # A "feat./ft." credit in the title is still worth trimming out of
+        # the displayed song title (it reads better without it), even
+        # though it no longer overrides the artist.
         feat_match = _FEAT_RE.search(song_title)
         if feat_match:
-            featured_artist = song_title[feat_match.end():].strip(" .,-")
             song_title = song_title[: feat_match.start()].strip(" .,-")
-            if featured_artist:
-                candidates.append(featured_artist)
-
-        for segment in remaining:
-            cleaned_segment = self._strip_noise(segment)
-            if not cleaned_segment:
-                continue
-
-            # An explicit "Singer:" label is the strongest possible signal
-            # and always wins outright, regardless of position or shape.
-            singer_match = _SINGER_LABEL_RE.match(cleaned_segment)
-            if singer_match:
-                labeled_singer = cleaned_segment[singer_match.end():].strip(" .,-")
-                continue
-
-            # Composer/lyricist credits are a different role than the
-            # performing artist — waterlink only reports the singer, so
-            # these are dropped rather than used as the artist.
-            composer_match = _COMPOSER_LABEL_RE.match(cleaned_segment)
-            if composer_match:
-                extra_tags.append(cleaned_segment)
-                continue
-
-            if _CAST_LABEL_RE.match(cleaned_segment) or _MOVIE_LABEL_RE.match(cleaned_segment):
-                extra_tags.append(cleaned_segment)
-                continue
-
-            if cleaned_segment.lower().strip() in self._movie_titles:
-                extra_tags.append(cleaned_segment)
-                if not candidates:
-                    # Movie title appeared before any name-like segment —
-                    # it's acting as a divider between itself and what
-                    # follows (typically the singer credit), e.g.
-                    # "Mulaqaat | Dream Girl | Ayushmann Khurrana | Meet
-                    # Bros". If names already preceded it, it's just
-                    # interleaved with cast/singer segments and shouldn't
-                    # override the normal first-wins ordering.
-                    movie_title_index = len(candidates)
-                continue
-
-            if self._looks_like_label_or_noise(cleaned_segment):
-                extra_tags.append(cleaned_segment)
-                continue
-
-            normalized = self._normalize_artist(cleaned_segment)
-            candidates.append(normalized)
-            if movie_title_index is not None:
-                candidates_after_movie.append(normalized)
-
-        if labeled_singer:
-            artist_candidate: str | None = labeled_singer
-            extra_tags.extend(candidates)
-        else:
-            if candidates_after_movie:
-                # A movie title led the remaining segments, so everything
-                # after it is cast/singer credits with no positional
-                # signal left to lean on ("Dream Girl | Ayushmann Khurrana
-                # | Meet Bros" — both segments are equally name-shaped).
-                # Real-world credit blocks conventionally list cast before
-                # singers in this layout, so the *last* name-like segment
-                # is preferred here specifically (opposite of the general
-                # first-wins rule below).
-                name_like = [
-                    c for c in candidates_after_movie if self._has_person_name_shape(c)
-                ]
-                pool = name_like or candidates_after_movie
-                artist_candidate = self._trim_trailing_names(pool[-1])
-            else:
-                artist_candidate = self._pick_best_artist_candidate(candidates)
-            for candidate in candidates:
-                if candidate != artist_candidate:
-                    extra_tags.append(candidate)
-
-        final_author = author.strip()
-        if self._looks_like_label_or_noise(final_author) and artist_candidate:
-            final_author = artist_candidate
-        elif artist_candidate and not final_author:
-            final_author = artist_candidate
 
         if not song_title:
             song_title = original_title.strip()
 
+        channel_name = author.strip() or original_author.strip()
+
         return CleanedMetadata(
             title=song_title,
-            artist=final_author or original_author.strip(),
+            artist=channel_name,
             original_title=original_title,
             original_author=original_author,
             extra_tags=tuple(extra_tags),
+        )
+
+    def _clean_non_youtube(self, *, title: str, author: str) -> CleanedMetadata:
+        """Clean metadata for any non-YouTube source.
+
+        These platforms (Spotify, Apple Music, Deezer, etc.) already give
+        Lavalink real, structured artist metadata via ``author`` — it is
+        never rewritten or second-guessed here. Only cosmetic bracketed
+        noise that occasionally leaks into the title is stripped.
+        """
+
+        original_title, original_author = title, author
+        cleaned_title = _TITLE_ONLY_BRACKET_NOISE_RE.sub("", title)
+        cleaned_title = _MULTI_SPACE_RE.sub(" ", cleaned_title)
+        cleaned_title = _TRAILING_PUNCT_RE.sub("", cleaned_title).strip()
+
+        return CleanedMetadata(
+            title=cleaned_title or original_title.strip(),
+            artist=author.strip() or original_author.strip(),
+            original_title=original_title,
+            original_author=original_author,
         )
 
     def clean_track(self, track: Track) -> Track:
@@ -377,7 +276,9 @@ class TitleCleaner:
         ``raw_title`` / ``raw_author`` so nothing is lost.
         """
 
-        result = self.clean(title=track.title, author=track.author)
+        result = self.clean(
+            title=track.title, author=track.author, source_name=track.source_name
+        )
         if not result.was_changed:
             return track
         return replace(
@@ -409,114 +310,6 @@ class TitleCleaner:
         text = _MULTI_SPACE_RE.sub(" ", text)
         text = _TRAILING_PUNCT_RE.sub("", text)
         return text.strip()
-
-    def _looks_like_label_or_noise(self, segment: str) -> bool:
-        lowered = segment.lower().strip()
-        if not lowered:
-            return True
-        if lowered in self._label_names:
-            return True
-        for label in self._label_names:
-            if label in lowered:
-                return True
-        if lowered in self._noise_phrases:
-            return True
-        # Pure year or numeric tag, e.g. "2024", "#1".
-        if re.fullmatch(r"#?\d{1,4}", lowered):
-            return True
-        # Generic single marketing words.
-        if lowered in {
-            "viral", "trending", "new", "latest", "exclusive", "hd", "4k",
-            "lyrics", "lyrical", "lyric video", "audio", "video", "full song",
-            "full video", "out now", "clip", "teaser", "trailer",
-        }:
-            return True
-        return False
-
-    def _pick_best_artist_candidate(self, candidates: list[str]) -> str | None:
-        """Pick the most likely singer/artist segment among several.
-
-        The dominant real-world convention (Bollywood soundtracks
-        especially) is: song title, then singer(s)/composer(s) segment,
-        then movie/cast segment(s) — e.g.::
-
-            Kesariya | Arijit Singh | Brahmastra | Ranbir Kapoor, Alia Bhatt
-            Chaleya | Anirudh, Arijit Singh, Shilpa Rao | Shah Rukh Khan, Nayanthara
-
-        So among segments that plausibly look like person names, the
-        *first* one is preferred outright — position (proximity to the
-        title) is a stronger signal than how name-dense a later segment
-        looks, since cast segments are often just as (or more) name-dense
-        than the singer segment. Density is only used to filter out
-        segments that don't look like names at all (already done by the
-        caller via `_looks_like_label_or_noise`), not to rank among ones
-        that do. The exception is a single merged segment mixing cast and
-        singers with no separator, handled by :meth:`_trim_trailing_names`.
-
-        When a recognized movie title was present in the segment list, the
-        caller passes only the candidates that appeared *after* it — the
-        movie name acts as a divider, and the singer credit conventionally
-        follows it (e.g. ``Mulaqaat | Dream Girl | Ayushmann Khurrana |
-        Meet Bros``, where "Meet Bros" is the singer). If nothing follows
-        the movie title, the caller falls back to the full candidate list.
-        """
-
-        if not candidates:
-            return None
-
-        name_like = [c for c in candidates if self._has_person_name_shape(c)]
-        pool = name_like or candidates
-        return self._trim_trailing_names(pool[0])
-
-    def _has_person_name_shape(self, segment: str) -> bool:
-        """Whether a segment looks like it's made of person name(s) rather
-        than a movie/album/project title.
-
-        Movie titles are usually a single run of Title Case words with no
-        list separator (e.g. "Rocky Aur Rani Kii Prem Kahaani",
-        "Shershaah"). Person-name lists are either a single short
-        (<= 3 word) name, or multiple names joined by a comma/ampersand.
-        This isn't foolproof — some movie titles are short enough to look
-        like a name, and some singer credits are a single word — but it
-        correctly separates the common cases in practice.
-        """
-
-        words = [w for w in re.split(r"[\s,&]+", segment) if w]
-        if not words:
-            return False
-        title_case_ratio = sum(1 for w in words if w[:1].isupper()) / len(words)
-        if title_case_ratio < 0.6:
-            return False
-        has_list_separator = bool(re.search(r",|&|\band\b", segment, re.IGNORECASE))
-        # A short (<=3 word) Title Case phrase is plausibly a single
-        # person's name (e.g. "Arijit Singh", "Sonu Nigam"). Anything
-        # longer without a list separator reads as a title/phrase instead
-        # (e.g. "Rocky Aur Rani Kii Prem Kahaani").
-        return has_list_separator or len(words) <= 3
-
-    def _trim_trailing_names(self, segment: str) -> str:
-        """When a single segment is a comma-separated list of 4+ names,
-        real-world credit ordering strongly suggests the list mixes
-        cast/movie names first and singer(s)/composer(s) last. Long lists
-        (4+ names) are trimmed to roughly the trailing half; shorter lists
-        (2-3 names, typically all singers on a duet/trio track) are left
-        intact since trimming would likely remove a real co-singer.
-        """
-
-        parts = [p.strip() for p in segment.split(",") if p.strip()]
-        if len(parts) < 4:
-            return segment
-        midpoint = len(parts) // 2
-        return ", ".join(parts[midpoint:])
-
-    def _normalize_artist(self, segment: str) -> str:
-        # If it's a "feat. X" style segment, keep only the featured artist
-        # name portion since that's the most useful bit for display.
-        if _FEAT_RE.search(segment):
-            parts = _FEAT_RE.split(segment, maxsplit=1)
-            if len(parts) == 2 and parts[1].strip():
-                return parts[1].strip()
-        return segment.strip()
 
 
 _default_cleaner = TitleCleaner()

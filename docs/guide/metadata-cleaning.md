@@ -1,18 +1,41 @@
 # Clean Metadata
 
-Free sources like YouTube are usually uploaded by a label or channel, not
-the performing artist, so raw Lavalink metadata often looks like this:
+Different sources report the artist very differently, so waterlink treats
+YouTube and everything else separately instead of guessing with one
+heuristic:
+
+- **YouTube / YouTube Music**: Lavalink only gives you the video title and
+  the name of the channel that uploaded it — there's no real "artist"
+  field. The channel name is used as the artist. Title text is *not*
+  mined to guess a "real" performer, since that's inherently unreliable
+  (a Title-Case segment could be a singer, a movie name, or a cast list,
+  and there's no way to tell from text alone).
+- **Every other source** (Spotify, Apple Music, Deezer, SoundCloud with
+  proper tags, etc.): these platforms already give Lavalink real,
+  structured artist metadata. The `author` field is trusted as-is and
+  never rewritten.
+
+Example — a YouTube result:
 
 ```
 title:  "Tere Liye | Arijit Singh | Viral | T-Series"
 author: "T-Series"
 ```
 
-waterlink can turn that into what you actually want to display:
+becomes:
 
 ```
 title:  "Tere Liye"
-author: "Arijit Singh"
+author: "T-Series"        # the channel name, not a guessed performer
+extra_tags: ("Arijit Singh",)   # other title segments, kept for optional display
+```
+
+A Spotify result is left as-is (bracket noise like `(Official Audio)` is
+still stripped from the title, but the author is never touched):
+
+```
+title:  "Tere Liye"
+author: "Arijit Singh"    # trusted verbatim — this is real metadata
 ```
 
 ## Enabling it
@@ -35,33 +58,32 @@ Directly on a track you already have:
 cleaned = waterlink.clean_track(track)
 ```
 
-## How it decides what's noise vs. an artist
+## How it decides what to do
 
-1. The title is split on separators (`|`, `•`, ` - `, etc.) into segments.
-   The first segment becomes the cleaned title, with bracketed tags like
-   `(Official Video)` and marketing phrases stripped.
-2. Remaining segments are classified as either a likely **artist name**
-   or a **label/noise tag** — using a built-in list of common record
-   labels (T-Series, Zee Music, Sony Music, Universal, etc.), plus
-   heuristics for movie/album names vs. comma-separated person names.
-3. If the uploader field itself matches a known label, and a plausible
-   artist was found in the title, the label is replaced by that artist.
-   The original uploader is **never discarded** blindly — it's only
-   replaced when there's a real signal from the title.
-4. YouTube's auto-generated `"<Artist> - Topic"` and `"<Artist>VEVO"`
-   channel names are recognized and trimmed to the plain artist name.
+1. `Track.source_name` (Lavalink's `sourceName`) determines the strategy.
+   `"youtube"` and `"youtube_music"` / `"ytmusic"` use the YouTube path;
+   everything else uses the trust-the-author path.
+2. **YouTube path**: the title is split on separators (`|`, `•`, ` - `,
+   etc.). The first segment becomes the cleaned title (bracketed tags
+   like `(Official Video)` and marketing phrases are stripped from it).
+   The channel name — with YouTube's auto-generated `"<Artist> - Topic"`
+   and `"<Artist>VEVO"` suffixes trimmed — is always the artist. Other
+   title segments (movie name, cast, label name, etc.) are kept on
+   `CleanedMetadata.extra_tags` in case you want to show them, but they're
+   never promoted to "artist".
+3. **Non-YouTube path**: only cosmetic bracketed noise is stripped from
+   the title. `author` is never rewritten.
 
-The cleaner is conservative: if it isn't confident, it leaves the
-original title/author alone rather than guessing. Original values are
-always preserved on the cleaned `Track` under
+Original values are always preserved on the cleaned `Track` under
 `track.extra["raw_title"]` / `track.extra["raw_author"]`.
 
-## Extending the label list
+## Notes on the old `extra_label_names` / `extra_movie_titles` options
 
-```python
-cleaner = waterlink.TitleCleaner(
-    extra_label_names=("my regional label", "another uploader"),
-    extra_noise_phrases=("official channel",),
-)
-client = waterlink.WaterlinkClient(bot=bot, clean_metadata=True, title_cleaner=cleaner)
-```
+Earlier versions tried to guess a "real artist" out of YouTube title text
+using a list of known record labels and movie titles. That approach could
+easily pick the wrong segment (e.g. a cast member instead of the singer),
+so it's been replaced with the channel name, which is always correct for
+what it actually represents. `TitleCleaner(extra_label_names=..., extra_movie_titles=...)`
+are still accepted as no-op parameters so existing code doesn't break, but
+they no longer do anything — use `extra_noise_phrases` if you want extra
+marketing phrases stripped from displayed titles.

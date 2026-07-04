@@ -6,6 +6,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`TitleCleaner` no longer guesses a "real artist" out of YouTube title
+  text.** The heuristic (splitting on separators, matching "Singer:"
+  labels, guessing which Title-Case segment was a person vs. a movie,
+  trimming cast lists, etc.) kept needing new edge-case fixes release
+  after release and could still pick the wrong segment. It's been
+  replaced with a much simpler, source-aware rule:
+  - **YouTube / YouTube Music**: the artist is always the uploading
+    channel's name (with cosmetic `" - Topic"` / `"VEVO"` suffixes
+    trimmed). Other title segments (movie name, cast, label, etc.) are
+    still available on `CleanedMetadata.extra_tags` if you want them, but
+    are no longer promoted to "artist".
+  - **Every other source** (Spotify, Apple Music, Deezer, SoundCloud with
+    proper tags, etc.): `track.author` is trusted as-is and never
+    rewritten, since these platforms already report real artist metadata.
+  - `TitleCleaner(extra_label_names=..., extra_movie_titles=...)` are
+    still accepted for backwards compatibility but are now no-ops; use
+    `extra_noise_phrases` to strip additional marketing phrases from
+    displayed YouTube titles.
+  - `TitleCleaner.clean()` gained a `source_name` keyword (defaults to
+    `"youtube"` for existing call sites); `clean_track()` now passes
+    `Track.source_name` through automatically.
+
+### Fixed
+
+- **Players could silently stop playing after a node websocket
+  reconnect.** If a node's connection dropped for long enough that
+  Lavalink's resume window expired (or the Lavalink process itself
+  restarted), Lavalink would forget every player that had been attached
+  to it, but waterlink kept using its own in-memory state as if nothing
+  had happened — voice connections and current tracks were never
+  re-sent, so playback just stopped with no error, event, or log message
+  explaining why. `Node` now checks `resumed` on every `ready` OP and, if
+  the session wasn't resumed, automatically re-sends each affected
+  player's voice state and re-issues its current track from its last
+  known position.
+- The watchdog's node-staleness check was marking every ready node as
+  "just reported stats" on every poll tick, regardless of whether a
+  `stats` OP had actually arrived — which meant a genuinely stalled node
+  (websocket open, `stats` OP no longer arriving) would never be flagged.
+  It now only starts/continues the staleness clock from when the node
+  actually reported stats.
+
 ## [1.0.6] - 2026-07-03
 
 ### Fixed

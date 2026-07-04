@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -134,6 +135,12 @@ class Node:
 
         self.session_id: str | None = None
         self.stats: NodeStats = NodeStats()
+        self.last_stats_at: float | None = None
+        """monotonic timestamp of the last ``stats`` OP received, or
+        ``None`` if none has arrived yet since this node was created (or
+        since its last reconnect). Used by :class:`~waterlink.watchdog.Watchdog`
+        to detect a node whose websocket is open but has stopped sending
+        real data."""
         self._ready = False
         self._players: dict[int, "Player"] = {}
 
@@ -179,6 +186,7 @@ class Node:
 
     async def _handle_close(self, code: int, reason: str) -> None:
         self._ready = False
+        self.last_stats_at = None
         self._events.dispatch(
             NodeDisconnectedEvent(node=self, code=code, reason=reason, will_reconnect=True)
         )
@@ -219,12 +227,36 @@ class Node:
                 logger.warning("Node %s: failed to enable session resuming", self.name)
 
         logger.info("Node %s ready (session=%s, resumed=%s)", self.name, self.session_id, resumed)
+
+        if not resumed:
+            # Lavalink did not resume our previous session (first-ever
+            # connect, the resume window expired, or the node process
+            # itself restarted). Any players that existed on the node
+            # side are gone - Lavalink has forgotten about them entirely,
+            # even though our in-memory Player objects still think
+            # they're connected and playing. Without re-syncing here,
+            # playback just silently stops with no error and no event,
+            # which looks like a random disconnect after a while.
+            await self._resync_players_after_reconnect()
+
         self._events.dispatch(
             NodeReadyEvent(node=self, resumed=resumed, session_id=self.session_id or "")
         )
 
+    async def _resync_players_after_reconnect(self) -> None:
+        for player in list(self._players.values()):
+            try:
+                await player._resync_after_node_reconnect()  # noqa: SLF001 - internal, same package
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Node %s: failed to resync player for guild %s after reconnect",
+                    self.name,
+                    player.guild_id,
+                )
+
     def _on_stats(self, payload: JSONDict) -> None:
         self.stats = NodeStats.from_payload(payload)
+        self.last_stats_at = time.monotonic()
         self._events.dispatch(NodeStatsUpdateEvent(node=self))
 
     def _on_player_update(self, payload: JSONDict) -> None:

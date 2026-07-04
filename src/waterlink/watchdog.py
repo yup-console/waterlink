@@ -51,7 +51,7 @@ class Watchdog:
         self._task: asyncio.Task[None] | None = None
         self._last_positions: dict[int, tuple[int, float]] = {}
         self._stalled_callbacks: list[RecoveryCallback] = []
-        self._node_stats_seen: dict[str, float] = {}
+        self._node_ready_since: dict[str, float] = {}
 
     def on_stalled_player(self, callback: RecoveryCallback) -> None:
         self._stalled_callbacks.append(callback)
@@ -83,16 +83,30 @@ class Watchdog:
         now = time.monotonic()
 
         for node in self.pool.nodes:
-            last_seen = self._node_stats_seen.get(node.name)
-            if node.is_ready and last_seen is not None:
-                if now - last_seen > self.config.node_stale_seconds:
+            if not node.is_ready:
+                self._node_ready_since.pop(node.name, None)
+            else:
+                # `node.last_stats_at` is set directly from the real
+                # `stats` OP timestamps (see Node._on_stats), reset to
+                # None on every disconnect - so this reflects genuine
+                # staleness rather than "did we happen to poll while
+                # ready", which previously let a node with an open but
+                # silent websocket go undetected indefinitely.
+                if node.last_stats_at is None:
+                    ready_since = self._node_ready_since.setdefault(node.name, now)
+                    if now - ready_since > self.config.node_stale_seconds:
+                        logger.warning(
+                            "Node %s has been ready for over %.0fs without ever "
+                            "reporting stats",
+                            node.name,
+                            self.config.node_stale_seconds,
+                        )
+                elif now - node.last_stats_at > self.config.node_stale_seconds:
                     logger.warning(
                         "Node %s has not reported stats in over %.0fs",
                         node.name,
                         self.config.node_stale_seconds,
                     )
-            if node.is_ready:
-                self._node_stats_seen[node.name] = now
 
             for player in list(node._players.values()):  # noqa: SLF001 - internal, same package
                 await self._check_player(player, now)

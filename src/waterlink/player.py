@@ -228,6 +228,46 @@ class Player:
     def _on_voice_ws_closed(self) -> None:
         self._connected_to_voice_gateway = False
 
+    async def _resync_after_node_reconnect(self) -> None:
+        """Re-establish this player on the node after a non-resumed
+        websocket reconnect (see :meth:`Node._on_ready`).
+
+        Lavalink has no memory of this player anymore, so its voice
+        connection and current track need to be resubmitted from
+        waterlink's own state, or playback just stays dead until the
+        caller notices and manually intervenes.
+        """
+
+        self._connected_to_voice_gateway = False
+        # Re-send the voice payload first so Lavalink can re-establish the
+        # Discord voice websocket before we ask it to play anything.
+        if self._voice_token and self._voice_endpoint and self._voice_session_id:
+            try:
+                await self._maybe_dispatch_voice_update()
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Guild %s: failed to resend voice state during node resync", self.guild_id
+                )
+
+        if self._is_active and self.queue.current is not None:
+            try:
+                await self.play(
+                    self.queue.current,
+                    replace=True,
+                    start_ms=self.position_ms,
+                    pause=self.paused,
+                )
+                logger.info(
+                    "Guild %s: resumed playback of %r at %sms after node reconnect",
+                    self.guild_id,
+                    self.queue.current.title,
+                    self.position_ms,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Guild %s: failed to resume playback during node resync", self.guild_id
+                )
+
     async def _advance_queue(self) -> None:
         try:
             next_track = self.queue.next()
